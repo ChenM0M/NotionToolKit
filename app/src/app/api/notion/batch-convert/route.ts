@@ -1,7 +1,7 @@
 import { Client } from "@notionhq/client";
-import { NotionToMarkdown } from "notion-to-md";
 import { NextResponse } from "next/server";
 import { HttpsProxyAgent } from "https-proxy-agent";
+import { createNotionToMarkdown } from "@/lib/notion-markdown";
 
 const PROXY_URL = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
 
@@ -65,7 +65,7 @@ export async function POST(request: Request) {
       ...(PROXY_URL && { agent: new HttpsProxyAgent(PROXY_URL) }),
     });
 
-    const n2m = new NotionToMarkdown({ notionClient: notion });
+    const n2m = createNotionToMarkdown(notion);
 
     // 使用并发限制处理页面转换
     const results = await processWithConcurrencyLimit<

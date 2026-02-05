@@ -1,7 +1,7 @@
-import { NotionToMarkdown } from "notion-to-md";
 import { NextResponse } from "next/server";
 import { getNotionPageId } from "@/lib/notion-utils";
 import { createNotionClient, withRetry } from "@/lib/notion-client";
+import { createNotionToMarkdown } from "@/lib/notion-markdown";
 import type { PageObjectResponse, PartialPageObjectResponse, DatabaseObjectResponse, PartialDatabaseObjectResponse } from "@notionhq/client/build/src/api-endpoints";
 
 export const runtime = "nodejs";
@@ -75,7 +75,7 @@ export async function POST(request: Request) {
     const rawTitle = extractPageTitle(pageInfo);
     const title = sanitizeFilename(rawTitle);
 
-    const n2m = new NotionToMarkdown({ notionClient: notion });
+    const n2m = createNotionToMarkdown(notion);
 
     // Fetch markdown with retry
     const mdblocks = await withRetry(

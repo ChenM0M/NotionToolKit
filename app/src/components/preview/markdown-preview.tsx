@@ -427,6 +427,26 @@ export function MarkdownPreview({
           text-decoration: underline;
         }
 
+        /* Notion-like child page block */
+        .prose-notion .notion-child-page {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.4rem;
+          padding: 0.1rem 0.35rem;
+          border-radius: 4px;
+          background: transparent;
+        }
+
+        .prose-notion .notion-child-page:hover {
+          background: var(--notion-hover);
+        }
+
+        .prose-notion .notion-child-page a {
+          color: var(--notion-text);
+          text-decoration: underline;
+          text-underline-offset: 2px;
+        }
+
         .prose-notion code {
           font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo,
             monospace;
