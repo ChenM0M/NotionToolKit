@@ -1,36 +1,115 @@
 import { NextRequest, NextResponse } from "next/server";
 import htmlToDocx from "html-to-docx";
-import { getImageAsBase64 } from "@/lib/image-cache";
+import { HttpsProxyAgent } from "https-proxy-agent";
 
-/**
- * Replace image-cache URLs with base64 data URIs
- */
-function embedCachedImages(html: string): string {
-  // Match img tags with /api/image-cache URLs
-  const imgRegex = /<img\s+[^>]*src=["']\/api\/image-cache\?id=([^"'&]+)["'][^>]*>/gi;
-  const matches = [...html.matchAll(imgRegex)];
+export const runtime = "nodejs";
 
-  console.log(`DOCX export: Found ${matches.length} cached images to embed`);
+const PROXY_URL = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
 
-  let result = html;
-  let successCount = 0;
+const IMG_TAG_REGEX = /<img\b[^>]*\bsrc=(["'])([^"']+)\1[^>]*>/gi;
 
-  for (const match of matches) {
-    const [fullMatch, imageId] = match;
-    console.log(`DOCX export: Processing image ${imageId}`);
-    const base64 = getImageAsBase64(imageId);
-    if (base64) {
-      const newImgTag = fullMatch.replace(/src=["'][^"']+["']/, `src="${base64}"`);
-      result = result.replace(fullMatch, newImgTag);
-      successCount++;
-      console.log(`DOCX export: Embedded image ${imageId} (${base64.length} chars)`);
-    } else {
-      console.log(`DOCX export: Image ${imageId} not found in cache`);
+function shouldSkipEmbedding(src: string): boolean {
+  return (
+    !src ||
+    src.startsWith("data:") ||
+    src.startsWith("blob:") ||
+    src.startsWith("images/") ||
+    src.startsWith("./") ||
+    src.startsWith("../")
+  );
+}
+
+function resolveImageUrl(src: string, requestUrl: string): URL | null {
+  try {
+    if (src.startsWith("/api/proxy-image")) {
+      const proxied = new URL(src, requestUrl);
+      const inner = proxied.searchParams.get("url");
+      if (inner) {
+        const innerUrl = new URL(inner, requestUrl);
+        if (innerUrl.protocol === "http:" || innerUrl.protocol === "https:") {
+          return innerUrl;
+        }
+      }
+      return proxied;
     }
+
+    const url = new URL(src, requestUrl);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return null;
+    }
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchAsDataUri(url: URL, requestUrl: string): Promise<string | null> {
+  const selfOrigin = new URL(requestUrl).origin;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30_000);
+
+  const fetchOptions: RequestInit = {
+    signal: controller.signal,
+  };
+
+  if (PROXY_URL && url.origin !== selfOrigin) {
+    // @ts-expect-error Node.js fetch supports agent option
+    fetchOptions.agent = new HttpsProxyAgent(PROXY_URL);
   }
 
-  console.log(`DOCX export: Embedded ${successCount}/${matches.length} images`);
-  return result;
+  try {
+    const response = await fetch(url, fetchOptions);
+    if (!response.ok) {
+      return null;
+    }
+
+    const contentType = (response.headers.get("content-type") || "application/octet-stream").split(";")[0];
+    const buffer = await response.arrayBuffer();
+    const base64 = Buffer.from(buffer).toString("base64");
+    return `data:${contentType};base64,${base64}`;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function embedImages(html: string, requestUrl: string): Promise<string> {
+  const matches = [...html.matchAll(IMG_TAG_REGEX)];
+  const uniqueSrcs = [...new Set(matches.map((m) => m[2]))];
+
+  if (uniqueSrcs.length === 0) {
+    return html;
+  }
+
+  console.log(`DOCX export: Found ${uniqueSrcs.length} images to embed`);
+
+  const srcToDataUri = new Map<string, string>();
+  const concurrency = 4;
+
+  for (let i = 0; i < uniqueSrcs.length; i += concurrency) {
+    const batch = uniqueSrcs.slice(i, i + concurrency);
+    await Promise.all(
+      batch.map(async (src) => {
+        if (shouldSkipEmbedding(src)) return;
+        const url = resolveImageUrl(src, requestUrl);
+        if (!url) return;
+        const dataUri = await fetchAsDataUri(url, requestUrl);
+        if (dataUri) {
+          srcToDataUri.set(src, dataUri);
+        }
+      })
+    );
+  }
+
+  console.log(`DOCX export: Embedded ${srcToDataUri.size}/${uniqueSrcs.length} images`);
+
+  return html.replace(IMG_TAG_REGEX, (tag, _q, src) => {
+    const dataUri = srcToDataUri.get(src);
+    if (!dataUri) return tag;
+    return tag.replace(/\bsrc=(["'])([^"']+)\1/i, `src="${dataUri}"`);
+  });
 }
 
 export async function POST(request: NextRequest) {
@@ -41,8 +120,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Missing html content" }, { status: 400 });
     }
 
-    // Embed cached images as base64 before generating DOCX
-    const htmlWithEmbeddedImages = embedCachedImages(html);
+    const htmlWithEmbeddedImages = await embedImages(html, request.url);
 
     const docxBuffer = await htmlToDocx(
       `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>${htmlWithEmbeddedImages}</body></html>`,

@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints";
 import { createNotionClient, withRetry } from "@/lib/notion-client";
 
+export const runtime = "nodejs";
+
 export interface NotionPageInfo {
   id: string;
   title: string;

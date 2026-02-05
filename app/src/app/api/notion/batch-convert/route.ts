@@ -5,6 +5,8 @@ import { HttpsProxyAgent } from "https-proxy-agent";
 
 const PROXY_URL = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
 
+export const runtime = "nodejs";
+
 // Notion API 推荐的并发限制
 const CONCURRENCY_LIMIT = 3;
 // 批次间延迟（毫秒）

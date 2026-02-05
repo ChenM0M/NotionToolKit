@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getImageCache } from "@/lib/image-cache";
 
+export const runtime = "nodejs";
+
 export async function GET(request: NextRequest) {
   const id = request.nextUrl.searchParams.get("id");
 
