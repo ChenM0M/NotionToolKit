@@ -19,7 +19,7 @@ npm run dev
 
 直接导入 GitHub 仓库即可。
 
-- 本仓库使用根目录 `vercel.json` 指定从 `app/` 构建 Next.js 项目（无需在面板里手动改 Root Directory）
+- 在 Vercel 项目设置里将 `Root Directory` 设为 `app`（这是一个 monorepo 结构）
 - 可选：如果你需要走代理访问 Notion / 图片资源，在 Vercel 项目里配置 `HTTP_PROXY` / `HTTPS_PROXY`
 
 ## 部署到 Cloudflare
