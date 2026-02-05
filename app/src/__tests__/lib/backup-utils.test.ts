@@ -41,8 +41,12 @@ describe('backup-utils', () => {
       const match = filename.match(/(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})/)
       expect(match).toBeTruthy()
 
-      const timestamp = match![1].replace(/-/g, (m, i) => (i > 9 ? ':' : m))
-      const fileDate = new Date(timestamp.replace('T', ' ').replace(/-/g, ':'))
+      // Convert filename timestamp to a parseable ISO-like format
+      // YYYY-MM-DDTHH-MM-SS -> YYYY-MM-DDTHH:MM:SS
+      const isoTimestamp = match![1].replace(/T(\d{2})-(\d{2})-(\d{2})$/, 'T$1:$2:$3')
+      // getBackupFilename uses toISOString() (UTC), so parse as UTC.
+      const fileDate = new Date(`${isoTimestamp}Z`)
+      expect(Number.isNaN(fileDate.getTime())).toBe(false)
 
       // File date should be between before and after
       expect(fileDate.getTime()).toBeGreaterThanOrEqual(before.getTime() - 1000)

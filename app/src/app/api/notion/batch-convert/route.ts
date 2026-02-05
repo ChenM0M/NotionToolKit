@@ -81,7 +81,7 @@ export async function POST(request: Request) {
           return {
             pageId: page.id,
             title: page.title,
-            markdown: mdString.parent,
+            markdown: mdString.parent ?? "",
             path: page.path,
           };
         } catch (error: unknown) {

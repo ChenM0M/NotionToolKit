@@ -83,7 +83,8 @@ export async function POST(request: Request) {
       3,
       1000
     );
-    const markdown = n2m.toMarkdownString(mdblocks).parent;
+    const mdString = n2m.toMarkdownString(mdblocks);
+    const markdown = mdString.parent ?? "";
 
     return NextResponse.json({
       markdown,

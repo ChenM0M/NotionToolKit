@@ -20,8 +20,9 @@ type ViewMode = "source" | "preview" | "split";
 /**
  * 计算文本统计信息
  */
-function getTextStats(text: string) {
-  const trimmed = text.trim();
+function getTextStats(text: unknown) {
+  const safeText = typeof text === "string" ? text : "";
+  const trimmed = safeText.trim();
   if (!trimmed) {
     return { chars: 0, charsNoSpace: 0, words: 0, lines: 0 };
   }
@@ -235,7 +236,8 @@ export function MarkdownPreview({
 }: MarkdownPreviewProps) {
   const [viewMode, setViewMode] = useState<ViewMode>("preview");
 
-  const stats = useMemo(() => getTextStats(markdown), [markdown]);
+  const safeMarkdown = typeof markdown === "string" ? markdown : "";
+  const stats = useMemo(() => getTextStats(safeMarkdown), [safeMarkdown]);
 
   if (isLoading) {
     return (
@@ -248,7 +250,7 @@ export function MarkdownPreview({
     );
   }
 
-  if (!markdown) {
+  if (!safeMarkdown) {
     return (
       <div
         className={cn(
@@ -331,7 +333,7 @@ export function MarkdownPreview({
         {viewMode === "source" && (
           <div className="h-full overflow-auto p-6 notion-scrollbar">
             <pre className="whitespace-pre-wrap font-mono text-sm text-notion-text bg-notion-code p-4 rounded-lg overflow-auto">
-              {markdown}
+              {safeMarkdown}
             </pre>
           </div>
         )}
@@ -344,7 +346,7 @@ export function MarkdownPreview({
                 rehypePlugins={[rehypeRaw]}
                 components={markdownComponents}
               >
-                {markdown}
+                {safeMarkdown}
               </ReactMarkdown>
             </div>
           </div>
@@ -358,7 +360,7 @@ export function MarkdownPreview({
                 Markdown 源码
               </div>
               <pre className="whitespace-pre-wrap font-mono text-sm text-notion-text bg-notion-code p-4 rounded-lg overflow-auto">
-                {markdown}
+                {safeMarkdown}
               </pre>
             </div>
 
@@ -373,7 +375,7 @@ export function MarkdownPreview({
                   rehypePlugins={[rehypeRaw]}
                   components={markdownComponents}
                 >
-                  {markdown}
+                  {safeMarkdown}
                 </ReactMarkdown>
               </div>
             </div>
