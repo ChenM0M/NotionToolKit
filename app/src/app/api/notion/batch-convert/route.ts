@@ -1,7 +1,7 @@
 import { Client } from "@notionhq/client";
 import { NextResponse } from "next/server";
 import { HttpsProxyAgent } from "https-proxy-agent";
-import { createNotionToMarkdown } from "@/lib/notion-markdown";
+import { createNotionToMarkdown, mdBlocksToParentMarkdown } from "@/lib/notion-markdown";
 
 const PROXY_URL = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
 
@@ -76,12 +76,11 @@ export async function POST(request: Request) {
       async (page): Promise<ConvertedPage> => {
         try {
           const mdblocks = await n2m.pageToMarkdown(page.id);
-          const mdString = n2m.toMarkdownString(mdblocks);
 
           return {
             pageId: page.id,
             title: page.title,
-            markdown: mdString.parent ?? "",
+            markdown: mdBlocksToParentMarkdown(n2m, mdblocks),
             path: page.path,
           };
         } catch (error: unknown) {

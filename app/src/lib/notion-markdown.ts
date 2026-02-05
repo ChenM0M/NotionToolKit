@@ -1,4 +1,5 @@
 import { NotionToMarkdown } from "notion-to-md";
+import type { MdBlock } from "notion-to-md/build/types";
 
 function escapeHtml(text: string): string {
   return text
@@ -38,4 +39,34 @@ export function createNotionToMarkdown(notionClient: unknown) {
   });
 
   return n2m;
+}
+
+function normalizeBlocksForPreview(blocks: MdBlock[]): MdBlock[] {
+  return blocks.map((block) => {
+    const children = normalizeBlocksForPreview(block.children);
+
+    // notion-to-md's toMarkdownString intentionally skips rendering parent of `child_page`.
+    // For preview we want a Notion-like link and we do NOT want to inline the child page content.
+    if (block.type === "child_page") {
+      return {
+        ...block,
+        type: "paragraph",
+        children: [],
+      };
+    }
+
+    return {
+      ...block,
+      children,
+    };
+  });
+}
+
+export function mdBlocksToParentMarkdown(
+  n2m: NotionToMarkdown,
+  blocks: MdBlock[]
+): string {
+  const normalized = normalizeBlocksForPreview(blocks);
+  const mdString = n2m.toMarkdownString(normalized);
+  return mdString.parent ?? "";
 }

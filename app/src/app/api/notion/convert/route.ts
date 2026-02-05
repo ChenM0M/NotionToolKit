@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getNotionPageId } from "@/lib/notion-utils";
 import { createNotionClient, withRetry } from "@/lib/notion-client";
-import { createNotionToMarkdown } from "@/lib/notion-markdown";
+import { createNotionToMarkdown, mdBlocksToParentMarkdown } from "@/lib/notion-markdown";
 import type { PageObjectResponse, PartialPageObjectResponse, DatabaseObjectResponse, PartialDatabaseObjectResponse } from "@notionhq/client/build/src/api-endpoints";
 
 export const runtime = "nodejs";
@@ -83,8 +83,7 @@ export async function POST(request: Request) {
       3,
       1000
     );
-    const mdString = n2m.toMarkdownString(mdblocks);
-    const markdown = mdString.parent ?? "";
+    const markdown = mdBlocksToParentMarkdown(n2m, mdblocks);
 
     return NextResponse.json({
       markdown,
