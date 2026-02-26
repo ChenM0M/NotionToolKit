@@ -30,42 +30,53 @@ export function markdownToHtml(markdown: string, title?: string): string {
     return `__INLINE_CODE_${index}__`;
   });
 
-  // 处理表格
+  // 处理表格（包含 Notion 图片列布局的特殊表格）
   html = html.replace(
-    /^\|(.+)\|\s*\n\|[-:\s|]+\|\s*\n((?:\|.+\|\s*\n?)+)/gm,
-    (match, headerRow, bodyRows) => {
-      const headers = headerRow
-        .split("|")
-        .map((h: string) => h.trim())
-        .filter(Boolean);
-      const rows = bodyRows
-        .trim()
-        .split("\n")
-        .map((row: string) =>
-          row
-            .split("|")
-            .map((cell: string) => cell.trim())
-            .filter((cell: string, i: number, arr: string[]) => i > 0 || cell !== "" || arr.length === headers.length + 2)
-            .slice(0, -1)
-            .slice(1)
-        );
+    /^\|(.+)\|\s*\n\|[-:\s|]+\|\s*\n((?:\|.*\|\s*\n?)+)/gm,
+    (match) => {
+      const lines = match.trimEnd().split("\n");
+      if (lines.length < 3) return match;
 
-      let table = '<table class="markdown-table">\n<thead>\n<tr>\n';
-      headers.forEach((h: string) => {
-        table += `<th>${processInlineMarkdown(h)}</th>\n`;
-      });
-      table += "</tr>\n</thead>\n<tbody>\n";
+      const parseRow = (line: string): string[] => {
+        let trimmed = line.trim();
+        if (trimmed.startsWith("|")) trimmed = trimmed.slice(1);
+        if (trimmed.endsWith("|")) trimmed = trimmed.slice(0, -1);
+        return trimmed.split("|").map((cell) => cell.trim());
+      };
 
-      rows.forEach((row: string[]) => {
-        table += "<tr>\n";
-        row.forEach((cell: string) => {
-          table += `<td>${processInlineMarkdown(cell)}</td>\n`;
-        });
-        table += "</tr>\n";
-      });
+      const headers = parseRow(lines[0]);
+      const bodyLines = lines.slice(2).filter((l) => l.trim().startsWith("|"));
+      const rows = bodyLines.map(parseRow);
 
-      table += "</tbody>\n</table>";
-      return table;
+      const isNotionColumns = headers.some((h) => h.includes("data-notion-columns"));
+
+      const colCount = Math.max(
+        headers.length,
+        ...rows.map((r) => r.length)
+      );
+      const pad = (cells: string[]) =>
+        [...cells, ...Array(Math.max(0, colCount - cells.length)).fill("")].slice(0, colCount);
+
+      const normalizedHeaders = pad(headers);
+      const normalizedRows = rows.map(pad);
+
+      const renderRow = (tag: "th" | "td", cells: string[]) =>
+        `<tr>${cells
+          .map((cell) => `<${tag}>${processInlineMarkdown(cell)}</${tag}>`)
+          .join("")}</tr>`;
+
+      if (isNotionColumns) {
+        return `<table class="notion-columns-table"><tbody>${normalizedRows
+          .map((r) => renderRow("td", r))
+          .join("")}</tbody></table>`;
+      }
+
+      return `<table class="markdown-table"><thead>${renderRow(
+        "th",
+        normalizedHeaders
+      )}</thead><tbody>${normalizedRows
+        .map((r) => renderRow("td", r))
+        .join("")}</tbody></table>`;
     }
   );
 
@@ -308,6 +319,49 @@ export function markdownToHtml(markdown: string, title?: string): string {
 
     table.markdown-table tr:nth-child(even) {
       background-color: var(--code-bg);
+    }
+
+    /* Notion-like image columns (generated from Notion column_list) */
+    table.notion-columns-table {
+      width: 100%;
+      table-layout: fixed;
+      border-collapse: separate;
+      border-spacing: 24px 0;
+      margin: 1em 0;
+    }
+
+    table.notion-columns-table td {
+      border: none;
+      padding: 0;
+      vertical-align: top;
+    }
+
+    table.notion-columns-table img {
+      display: block;
+      width: 100%;
+      margin: 0 0 16px 0;
+    }
+
+    table.notion-columns-table img:last-child {
+      margin-bottom: 0;
+    }
+
+    @media (max-width: 640px) {
+      table.notion-columns-table,
+      table.notion-columns-table tbody,
+      table.notion-columns-table tr,
+      table.notion-columns-table td {
+        display: block;
+        width: 100%;
+      }
+
+      table.notion-columns-table {
+        border-spacing: 0;
+      }
+
+      table.notion-columns-table td + td {
+        margin-top: 20px;
+      }
     }
 
     del {

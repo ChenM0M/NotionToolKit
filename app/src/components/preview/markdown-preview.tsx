@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, createContext, useContext } from "react";
 import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -192,30 +192,94 @@ function ProxiedImage({ src, alt, ...props }: React.ImgHTMLAttributes<HTMLImageE
   );
 }
 
+type TableVariant = "markdown" | "columns";
+
+const TableVariantContext = createContext<TableVariant>("markdown");
+
+function hasNotionColumnsMarker(node: unknown): boolean {
+  if (!node || typeof node !== "object") return false;
+
+  // hast Element
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const anyNode = node as any;
+  if (anyNode.type === "element") {
+    const props = (anyNode.properties || {}) as Record<string, unknown>;
+    if (
+      Object.prototype.hasOwnProperty.call(props, "data-notion-columns") ||
+      Object.prototype.hasOwnProperty.call(props, "dataNotionColumns")
+    ) {
+      return true;
+    }
+  }
+
+  const children = anyNode.children;
+  if (Array.isArray(children)) {
+    return children.some((c: unknown) => hasNotionColumnsMarker(c));
+  }
+
+  return false;
+}
+
+function MarkdownTable(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  props: any
+) {
+  const { node, className, children, ...rest } = props;
+  const variant: TableVariant = hasNotionColumnsMarker(node) ? "columns" : "markdown";
+
+  const wrapperClass =
+    variant === "columns" ? "my-6 overflow-x-auto" : "overflow-auto my-4";
+  const tableClass =
+    variant === "columns"
+      ? cn("notion-columns-table", className)
+      : cn(
+          "min-w-full border-collapse border border-notion-border",
+          className
+        );
+
+  return (
+    <TableVariantContext.Provider value={variant}>
+      <div className={wrapperClass}>
+        <table className={tableClass} {...rest}>
+          {children}
+        </table>
+      </div>
+    </TableVariantContext.Provider>
+  );
+}
+
+function MarkdownThead({ children }: { children?: React.ReactNode }) {
+  const variant = useContext(TableVariantContext);
+  if (variant === "columns") return null;
+  return <thead className="bg-notion-hover">{children}</thead>;
+}
+
+function MarkdownTh({ children }: { children?: React.ReactNode }) {
+  const variant = useContext(TableVariantContext);
+  if (variant === "columns") return null;
+  return (
+    <th className="border border-notion-border px-4 py-2 text-left font-semibold">
+      {children}
+    </th>
+  );
+}
+
+function MarkdownTd({ children }: { children?: React.ReactNode }) {
+  const variant = useContext(TableVariantContext);
+  if (variant === "columns") {
+    return <td className="align-top p-0">{children}</td>;
+  }
+  return <td className="border border-notion-border px-4 py-2">{children}</td>;
+}
+
 // 定义 react-markdown 组件类型
 const markdownComponents: Components = {
   code: CodeBlock as Components["code"],
   img: ProxiedImage as Components["img"],
-  table: ({ children }) => (
-    <div className="overflow-auto my-4">
-      <table className="min-w-full border-collapse border border-notion-border">
-        {children}
-      </table>
-    </div>
-  ),
-  thead: ({ children }) => (
-    <thead className="bg-notion-hover">{children}</thead>
-  ),
-  th: ({ children }) => (
-    <th className="border border-notion-border px-4 py-2 text-left font-semibold">
-      {children}
-    </th>
-  ),
-  td: ({ children }) => (
-    <td className="border border-notion-border px-4 py-2">
-      {children}
-    </td>
-  ),
+  table: MarkdownTable as Components["table"],
+  thead: MarkdownThead as Components["thead"],
+  th: MarkdownTh as Components["th"],
+  td: MarkdownTd as Components["td"],
   a: ({ href, children }) => (
     <a
       href={href}
@@ -503,6 +567,52 @@ export function MarkdownPreview({
           height: auto;
           border-radius: 4px;
           margin: 1em 0;
+        }
+
+        /* Notion-like image columns (generated from Notion column_list) */
+        .prose-notion [data-notion-columns] {
+          display: none !important;
+        }
+
+        .prose-notion table.notion-columns-table {
+          width: 100%;
+          table-layout: fixed;
+          border-collapse: separate;
+          border-spacing: 1.5rem 0;
+          margin: 1.25em 0;
+        }
+
+        .prose-notion table.notion-columns-table td {
+          border: none;
+          vertical-align: top;
+        }
+
+        .prose-notion table.notion-columns-table img {
+          display: block;
+          width: 100%;
+          margin: 0 0 1rem 0;
+        }
+
+        .prose-notion table.notion-columns-table img:last-child {
+          margin-bottom: 0;
+        }
+
+        @media (max-width: 640px) {
+          .prose-notion table.notion-columns-table,
+          .prose-notion table.notion-columns-table tbody,
+          .prose-notion table.notion-columns-table tr,
+          .prose-notion table.notion-columns-table td {
+            display: block;
+            width: 100%;
+          }
+
+          .prose-notion table.notion-columns-table {
+            border-spacing: 0;
+          }
+
+          .prose-notion table.notion-columns-table td + td {
+            margin-top: 1.25rem;
+          }
         }
 
         .prose-notion strong {

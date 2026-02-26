@@ -62,11 +62,86 @@ function normalizeBlocksForPreview(blocks: MdBlock[]): MdBlock[] {
   });
 }
 
+function sanitizeTableCell(text: string): string {
+  // Markdown tables are pipe-delimited; keep the cell single-line.
+  return text
+    .replace(/\r\n/g, "\n")
+    .trim()
+    .replace(/\|/g, "&#124;")
+    .replace(/\n+/g, "<br />");
+}
+
+function buildNotionImageColumnsTable(columnCells: string[]): string {
+  const headerCells = columnCells.map((_, idx) =>
+    idx === 0 ? '<span data-notion-columns></span>' : ""
+  );
+  const alignCells = columnCells.map(() => "---");
+  const bodyCells = columnCells.map((cell) => (cell.trim() ? cell : "&nbsp;"));
+
+  return [
+    `| ${headerCells.join(" | ")} |`,
+    `| ${alignCells.join(" | ")} |`,
+    `| ${bodyCells.join(" | ")} |`,
+  ].join("\n");
+}
+
+function isEmptyBlock(block: MdBlock): boolean {
+  return !block.parent.trim() && (!block.children || block.children.length === 0);
+}
+
+function tryConvertColumnListToImageColumnsTable(block: MdBlock): string | null {
+  const columns = (block.children || []).filter((c) => c.type === "column");
+  if (columns.length < 2) return null;
+
+  const columnCells: string[] = [];
+
+  for (const col of columns) {
+    const contentBlocks = (col.children || []).filter((b) => !isEmptyBlock(b));
+    // Only convert when the column contains images only (plus empty spacers).
+    if (contentBlocks.some((b) => b.type !== "image")) {
+      return null;
+    }
+
+    const imagesMd = contentBlocks
+      .map((b) => b.parent.trim())
+      .filter(Boolean)
+      .join("<br />");
+
+    columnCells.push(sanitizeTableCell(imagesMd));
+  }
+
+  return buildNotionImageColumnsTable(columnCells);
+}
+
+function transformImageColumnLists(blocks: MdBlock[]): MdBlock[] {
+  return blocks.map((block) => {
+    const children = transformImageColumnLists(block.children);
+    const next: MdBlock = {
+      ...block,
+      children,
+    };
+
+    if (next.type === "column_list") {
+      const table = tryConvertColumnListToImageColumnsTable(next);
+      if (table) {
+        return {
+          ...next,
+          parent: table,
+          children: [],
+        };
+      }
+    }
+
+    return next;
+  });
+}
+
 export function mdBlocksToParentMarkdown(
   n2m: NotionToMarkdown,
   blocks: MdBlock[]
 ): string {
   const normalized = normalizeBlocksForPreview(blocks);
-  const mdString = n2m.toMarkdownString(normalized);
+  const withImageColumns = transformImageColumnLists(normalized);
+  const mdString = n2m.toMarkdownString(withImageColumns);
   return mdString.parent ?? "";
 }
