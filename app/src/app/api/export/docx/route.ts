@@ -31,14 +31,14 @@ export async function POST(request: NextRequest) {
 
     const docxBuffer = await htmlToDocx(wrapDocxHtml(embedded.html), null, {
       table: { row: { cantSplit: true } },
-      footer: true,
-      pageNumber: true,
     });
 
     return new NextResponse(new Uint8Array(docxBuffer), {
       headers: {
         "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "Content-Disposition": "attachment",
+        "X-Images-Total": String(embedded.total),
+        "X-Images-Embedded": String(embedded.embedded),
       },
     });
   } catch (error) {

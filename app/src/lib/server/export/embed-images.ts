@@ -2,6 +2,24 @@ import { fetchImageAsDataUriCached } from "@/lib/server/export/fetch-image";
 
 const IMG_TAG_REGEX = /<img\b[^>]*\bsrc=(["]|['])([^"']+)\1[^>]*>/gi;
 
+function decodeHtmlEntities(text: string): string {
+  // We only need a small subset for URLs, but handle numeric entities too.
+  return text
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&#039;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => {
+      const cp = Number.parseInt(hex, 16);
+      return Number.isFinite(cp) ? String.fromCodePoint(cp) : _;
+    })
+    .replace(/&#(\d+);/g, (_, dec) => {
+      const cp = Number.parseInt(dec, 10);
+      return Number.isFinite(cp) ? String.fromCodePoint(cp) : _;
+    });
+}
+
 function shouldSkipEmbedding(src: string): boolean {
   return (
     !src ||
@@ -57,8 +75,9 @@ export async function embedImagesInHtml(
     const batch = uniqueSrcs.slice(i, i + concurrency);
     await Promise.all(
       batch.map(async (src) => {
-        if (shouldSkipEmbedding(src)) return;
-        const url = resolveImageUrl(src, requestUrl);
+        const decodedSrc = decodeHtmlEntities(src);
+        if (shouldSkipEmbedding(decodedSrc)) return;
+        const url = resolveImageUrl(decodedSrc, requestUrl);
         if (!url) return;
         const dataUri = await fetchImageAsDataUriCached(url, requestUrl);
         if (dataUri) {

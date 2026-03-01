@@ -313,6 +313,9 @@ export default function Home() {
         throw new Error("Failed to generate DOCX");
       }
 
+      const imagesTotal = Number(response.headers.get("X-Images-Total") || "0");
+      const imagesEmbedded = Number(response.headers.get("X-Images-Embedded") || "0");
+
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -322,7 +325,14 @@ export default function Home() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      toast.success("Word 文档下载已开始");
+
+      if (imagesTotal > 0 && imagesEmbedded < imagesTotal) {
+        toast.warning(
+          `Word 已生成，但有 ${imagesTotal - imagesEmbedded} 张图片未能嵌入，可能缺图`
+        );
+      } else {
+        toast.success("Word 文档下载已开始");
+      }
     } catch (err) {
       console.error("DOCX generation error:", err);
       toast.error("Word 文档生成失败，请尝试下载 HTML 格式");
@@ -330,79 +340,47 @@ export default function Home() {
     setShowDownloadMenu(false);
   };
 
-  const printToPdf = async () => {
+  const downloadPdf = async () => {
     if (!previewMarkdown) return;
 
     try {
-      toast.info("正在准备打印...");
+      toast.info("正在生成 PDF...");
 
-      // Generate final export HTML (with embedded images) on server
-      const response = await fetch("/api/export/html", {
+      const response = await fetch("/api/export/pdf", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ markdown: previewMarkdown, title: previewTitle }),
       });
 
       if (!response.ok) {
-        throw new Error("Failed to generate printable HTML");
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.error || "PDF 导出失败");
       }
 
-      const data = await response.json();
-      const finalHtml = typeof data?.html === "string" ? data.html : "";
-      if (!finalHtml) {
-        throw new Error("Missing HTML from server");
+      const imagesTotal = Number(response.headers.get("X-Images-Total") || "0");
+      const imagesEmbedded = Number(response.headers.get("X-Images-Embedded") || "0");
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${previewTitle}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      if (imagesTotal > 0 && imagesEmbedded < imagesTotal) {
+        toast.warning(
+          `PDF 已生成，但有 ${imagesTotal - imagesEmbedded} 张图片未能嵌入，可能缺图`
+        );
+      } else {
+        toast.success("PDF 下载已开始");
       }
-
-      // Print without opening a new window (avoid popup blockers / weird extra tab)
-      const iframe = document.createElement("iframe");
-      iframe.style.position = "fixed";
-      iframe.style.right = "0";
-      iframe.style.bottom = "0";
-      iframe.style.width = "0";
-      iframe.style.height = "0";
-      iframe.style.border = "0";
-      iframe.style.visibility = "hidden";
-
-      document.body.appendChild(iframe);
-
-      const win = iframe.contentWindow;
-      if (!win) {
-        iframe.remove();
-        toast.error("无法创建打印容器");
-        return;
-      }
-
-      const cleanup = () => {
-        try {
-          win.removeEventListener("afterprint", cleanup);
-        } catch {
-          // ignore
-        }
-        iframe.remove();
-      };
-
-      win.addEventListener("afterprint", cleanup);
-
-      win.document.open();
-      win.document.write(finalHtml);
-      win.document.close();
-
-      // Give the browser a tick to layout before printing.
-      setTimeout(() => {
-        try {
-          win.focus();
-          win.print();
-        } catch (e) {
-          console.error("Print error:", e);
-          cleanup();
-          toast.error("无法打开打印对话框");
-        }
-      }, 200);
-
-      toast.info("已打开打印对话框，请选择「另存为 PDF」");
     } catch (err) {
-      console.error("Print error:", err);
-      toast.error("打印准备失败");
+      console.error("PDF export error:", err);
+      const message = err instanceof Error ? err.message : "PDF 导出失败";
+      toast.error(message);
     }
     setShowDownloadMenu(false);
   };
@@ -784,13 +762,13 @@ export default function Home() {
                       Word (.docx)
                     </button>
                     <div className="border-t border-notion-border my-1" />
-                    <button
-                      className="flex items-center gap-2 w-full px-3 py-2 text-sm text-notion-text hover:bg-notion-hover transition-colors"
-                      onClick={printToPdf}
-                    >
-                      <Printer className="h-4 w-4" />
-                      打印 / 导出 PDF
-                    </button>
+                     <button
+                       className="flex items-center gap-2 w-full px-3 py-2 text-sm text-notion-text hover:bg-notion-hover transition-colors"
+                       onClick={downloadPdf}
+                     >
+                       <Printer className="h-4 w-4" />
+                       导出 PDF (.pdf)
+                     </button>
                   </div>
                 )}
               </div>
