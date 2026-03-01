@@ -344,9 +344,10 @@ export default function Home() {
     if (!previewMarkdown) return;
 
     try {
-      toast.info("正在生成 PDF...");
+      toast.info("正在准备打印...");
 
-      const response = await fetch("/api/export/pdf", {
+      // Generate export-ready HTML (with embedded images) on server.
+      const response = await fetch("/api/export/html", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ markdown: previewMarkdown, title: previewTitle }),
@@ -354,32 +355,130 @@ export default function Home() {
 
       if (!response.ok) {
         const data = await response.json().catch(() => null);
-        throw new Error(data?.error || "PDF 导出失败");
+        throw new Error(data?.error || "打印准备失败");
       }
 
-      const imagesTotal = Number(response.headers.get("X-Images-Total") || "0");
-      const imagesEmbedded = Number(response.headers.get("X-Images-Embedded") || "0");
+      const data = await response.json();
+      const finalHtml = typeof data?.html === "string" ? data.html : "";
+      const imagesTotal = Number(data?.images?.total || 0);
+      const imagesEmbedded = Number(data?.images?.embedded || 0);
 
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${previewTitle}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      if (!finalHtml) {
+        throw new Error("Missing HTML from server");
+      }
 
-      if (imagesTotal > 0 && imagesEmbedded < imagesTotal) {
-        toast.warning(
-          `PDF 已生成，但有 ${imagesTotal - imagesEmbedded} 张图片未能嵌入，可能缺图`
+      // Print via iframe to avoid opening a new window.
+      const iframe = document.createElement("iframe");
+      iframe.style.position = "fixed";
+      iframe.style.right = "0";
+      iframe.style.bottom = "0";
+      iframe.style.width = "0";
+      iframe.style.height = "0";
+      iframe.style.border = "0";
+      iframe.style.visibility = "hidden";
+      iframe.setAttribute("aria-hidden", "true");
+
+      document.body.appendChild(iframe);
+
+      const win = iframe.contentWindow;
+      if (!win) {
+        iframe.remove();
+        throw new Error("无法创建打印容器");
+      }
+
+      const printWindow: Window = win;
+
+      let cleanedUp = false;
+      let failSafe: number | null = null;
+
+      function cleanup() {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        try {
+          printWindow.removeEventListener("afterprint", onAfterPrint);
+        } catch {
+          // ignore
+        }
+        if (failSafe) {
+          window.clearTimeout(failSafe);
+        }
+        iframe.remove();
+      }
+
+      function onAfterPrint() {
+        cleanup();
+      }
+
+      const waitForAssets = async () => {
+        // Fonts (optional)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const anyDoc = printWindow.document as any;
+        if (anyDoc.fonts?.ready) {
+          try {
+            await anyDoc.fonts.ready;
+          } catch {
+            // ignore
+          }
+        }
+
+        const imgs = Array.from(printWindow.document.images);
+        await Promise.all(
+          imgs.map(async (img) => {
+            try {
+              // decode() waits for image to be fully decoded
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const anyImg = img as any;
+              if (typeof anyImg.decode === "function") {
+                await anyImg.decode();
+                return;
+              }
+            } catch {
+              // ignore
+            }
+
+            if (img.complete) return;
+            await new Promise<void>((resolve) => {
+              const done = () => resolve();
+              img.addEventListener("load", done, { once: true });
+              img.addEventListener("error", done, { once: true });
+            });
+          })
         );
-      } else {
-        toast.success("PDF 下载已开始");
-      }
+      };
+
+      failSafe = window.setTimeout(cleanup, 120_000);
+
+      printWindow.addEventListener("afterprint", onAfterPrint);
+
+      iframe.onload = () => {
+        void (async () => {
+          try {
+            await waitForAssets();
+            // Extra tick for layout stability
+            await new Promise((r) => setTimeout(r, 120));
+
+            printWindow.focus();
+            printWindow.print();
+
+            toast.info("已打开打印对话框，请选择「另存为 PDF」");
+            if (imagesTotal > 0 && imagesEmbedded < imagesTotal) {
+              toast.warning(
+                `发现 ${imagesTotal - imagesEmbedded} 张图片未能嵌入，打印可能缺图`
+              );
+            }
+          } catch (e) {
+            console.error("Print error:", e);
+            cleanup();
+            toast.error("打印准备失败");
+          }
+        })();
+      };
+
+      // Use srcdoc so the printed page has no external URL.
+      iframe.srcdoc = finalHtml;
     } catch (err) {
       console.error("PDF export error:", err);
-      const message = err instanceof Error ? err.message : "PDF 导出失败";
+      const message = err instanceof Error ? err.message : "打印准备失败";
       toast.error(message);
     }
     setShowDownloadMenu(false);

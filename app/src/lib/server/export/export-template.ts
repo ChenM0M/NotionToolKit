@@ -203,12 +203,26 @@ export const EXPORT_DOCUMENT_CSS = `
 
   @media print {
     @page {
-      margin: 12mm;
+      /*
+        Chrome/Edge "Headers and footers" are not controllable via JS.
+        Setting @page margin to 0 removes the header/footer area.
+        We then simulate margins using body padding.
+      */
+      margin: 0;
+    }
+
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
     }
 
     body {
       max-width: none;
-      padding: 0;
+      margin: 0;
+      padding: 12mm;
       background: #fff;
     }
 
@@ -219,6 +233,14 @@ export const EXPORT_DOCUMENT_CSS = `
     pre, code {
       white-space: pre-wrap;
       word-wrap: break-word;
+    }
+
+    img,
+    pre,
+    table,
+    blockquote {
+      break-inside: avoid;
+      page-break-inside: avoid;
     }
   }
 `;

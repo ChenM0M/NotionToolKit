@@ -79,7 +79,9 @@ export async function fetchImageCached(url: URL, requestUrl: string): Promise<Fe
     const fetchOptions: RequestInit = {
       signal: controller.signal,
       headers: {
-        accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        // Prefer formats that Word/html-to-docx can reliably embed.
+        accept:
+          "image/png,image/jpeg,image/gif,image/bmp,image/svg+xml,image/*;q=0.8,*/*;q=0.5",
         "user-agent": DEFAULT_UA,
       },
     };
