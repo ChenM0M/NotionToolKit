@@ -1,8 +1,15 @@
 import { NextResponse } from "next/server";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints";
 import { createNotionClient, withRetry } from "@/lib/notion-client";
+import { LruTtlCache } from "@/lib/server/lru-ttl-cache";
+import { tokenHash } from "@/lib/server/token-hash";
 
 export const runtime = "nodejs";
+
+const searchCache = new LruTtlCache<string, NotionPageInfo[]>({
+  maxEntries: 10,
+  defaultTtlMs: 60_000,
+});
 
 export interface NotionPageInfo {
   id: string;
@@ -86,6 +93,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Missing token" }, { status: 400 });
     }
 
+    const cacheKey = tokenHash(token);
+    const cachedPages = searchCache.get(cacheKey);
+    if (cachedPages) {
+      return NextResponse.json({ pages: cachedPages, cached: true });
+    }
+
     const notion = createNotionClient(token);
 
     const pages: NotionPageInfo[] = [];
@@ -122,7 +135,9 @@ export async function POST(request: Request) {
       startCursor = response.next_cursor ?? undefined;
     }
 
-    return NextResponse.json({ pages });
+    searchCache.set(cacheKey, pages);
+
+    return NextResponse.json({ pages, cached: false });
   } catch (error: unknown) {
     console.error("Notion Search API Error:", error);
     const errorMessage =

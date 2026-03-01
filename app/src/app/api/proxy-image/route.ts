@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { HttpsProxyAgent } from "https-proxy-agent";
+import { getImageCacheByUrl, setImageCacheByUrl } from "@/lib/image-cache";
 
 export const runtime = "nodejs";
 
@@ -30,6 +31,17 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const cached = getImageCacheByUrl(targetUrl);
+    if (cached) {
+      return new NextResponse(new Uint8Array(cached.data), {
+        headers: {
+          "Content-Type": cached.contentType,
+          "Cache-Control": "public, max-age=3600, stale-while-revalidate=86400",
+          "X-Image-Cache": "HIT",
+        },
+      });
+    }
+
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30_000);
 
@@ -41,8 +53,12 @@ export async function GET(request: NextRequest) {
       fetchOptions.agent = new HttpsProxyAgent(PROXY_URL);
     }
 
-    const response = await fetch(targetUrl, fetchOptions);
-    clearTimeout(timeoutId);
+    let response: Response;
+    try {
+      response = await fetch(targetUrl, fetchOptions);
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (!response.ok) {
       return NextResponse.json(
@@ -53,12 +69,15 @@ export async function GET(request: NextRequest) {
 
     const contentType =
       response.headers.get("content-type") || "application/octet-stream";
-    const buffer = await response.arrayBuffer();
+    const buffer = Buffer.from(await response.arrayBuffer());
+
+    setImageCacheByUrl(targetUrl, buffer, contentType.split(";")[0]);
 
     return new NextResponse(buffer, {
       headers: {
         "Content-Type": contentType,
-        "Cache-Control": "public, max-age=3600",
+        "Cache-Control": "public, max-age=3600, stale-while-revalidate=86400",
+        "X-Image-Cache": "MISS",
       },
     });
   } catch (error) {

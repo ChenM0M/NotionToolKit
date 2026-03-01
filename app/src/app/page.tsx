@@ -11,8 +11,8 @@ import { MarkdownPreview } from "@/components/preview/markdown-preview";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { createMarkdownZipWithImages, downloadBlob } from "@/lib/backup-utils";
 import { toast } from "sonner";
-import { markdownToHtml } from "@/lib/export-utils";
 import {
   RefreshCw,
   CheckSquare,
@@ -37,6 +37,7 @@ import {
   FileCode,
   Printer,
   ListChecks,
+  Archive,
 } from "lucide-react";
 
 export default function Home() {
@@ -49,6 +50,16 @@ export default function Home() {
   const [showDownloadMenu, setShowDownloadMenu] = useState(false);
   const [currentPreviewPageId, setCurrentPreviewPageId] = useState<string | null>(null);
   const [selectionMode, setSelectionMode] = useState(false);
+
+  const previewCacheRef = useRef(
+    new Map<
+      string,
+      { markdown: string; title: string; ts: number }
+    >()
+  );
+  const previewAbortRef = useRef<AbortController | null>(null);
+  const PREVIEW_CACHE_TTL_MS = 5 * 60_000;
+  const PREVIEW_CACHE_MAX = 30;
 
   const {
     pages,
@@ -80,6 +91,12 @@ export default function Home() {
       refresh();
     }
   }, [token, isHydrated]);
+
+  useEffect(() => {
+    return () => {
+      previewAbortRef.current?.abort();
+    };
+  }, []);
 
   // Close menus when clicking outside
   useEffect(() => {
@@ -118,14 +135,38 @@ export default function Home() {
   const loadPreview = async (pageId: string, pageTitle: string) => {
     if (!token) return;
 
-    setIsPreviewLoading(true);
+    const cached = previewCacheRef.current.get(pageId);
+    const now = Date.now();
+    const isFresh = cached ? now - cached.ts < PREVIEW_CACHE_TTL_MS : false;
+
+    if (cached) {
+      setPreviewMarkdown(cached.markdown);
+      setPreviewTitle(cached.title || pageTitle);
+    }
+
+    // If cache is fresh, skip network.
+    if (isFresh) {
+      setCurrentPreviewPageId(pageId);
+      setIsPreviewLoading(false);
+      return;
+    }
+
+    // Only show the big loading state when there's no cached content.
+    if (!cached) {
+      setIsPreviewLoading(true);
+    }
     setCurrentPreviewPageId(pageId);
 
     try {
+      previewAbortRef.current?.abort();
+      const controller = new AbortController();
+      previewAbortRef.current = controller;
+
       const response = await fetch("/api/notion/convert", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token, pageId }),
+        signal: controller.signal,
       });
 
       const data = await response.json();
@@ -136,13 +177,37 @@ export default function Home() {
 
       setPreviewMarkdown(data.markdown);
       setPreviewTitle(data.title || pageTitle);
+
+      // Update in-memory cache (LRU-ish)
+      const cache = previewCacheRef.current;
+      if (cache.has(pageId)) cache.delete(pageId);
+      cache.set(pageId, {
+        markdown: data.markdown,
+        title: data.title || pageTitle,
+        ts: Date.now(),
+      });
+      while (cache.size > PREVIEW_CACHE_MAX) {
+        const oldestKey = cache.keys().next().value as string | undefined;
+        if (!oldestKey) break;
+        cache.delete(oldestKey);
+      }
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        return;
+      }
+
       const message = err instanceof Error ? err.message : "预览失败";
       toast.error(message);
-      setPreviewMarkdown("");
-      setPreviewTitle("");
+
+      // If we had cached content, keep it; otherwise clear.
+      if (!cached) {
+        setPreviewMarkdown("");
+        setPreviewTitle("");
+      }
     } finally {
-      setIsPreviewLoading(false);
+      if (!cached) {
+        setIsPreviewLoading(false);
+      }
     }
   };
 
@@ -164,7 +229,7 @@ export default function Home() {
 
   const downloadMarkdown = () => {
     if (!previewMarkdown) return;
-    const blob = new Blob([previewMarkdown], { type: "text/markdown" });
+    const blob = new Blob([previewMarkdown], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -177,25 +242,42 @@ export default function Home() {
     setShowDownloadMenu(false);
   };
 
+  const downloadMarkdownZip = async () => {
+    if (!previewMarkdown) return;
+
+    try {
+      toast.info("正在打包 Markdown 与图片...");
+      const blob = await createMarkdownZipWithImages(previewMarkdown, previewTitle);
+      downloadBlob(blob, `${previewTitle}.zip`);
+      toast.success("ZIP 下载已开始");
+    } catch (err) {
+      console.error("Markdown ZIP error:", err);
+      toast.error("ZIP 打包失败");
+    }
+    setShowDownloadMenu(false);
+  };
+
   const downloadHtml = async () => {
     if (!previewMarkdown) return;
 
     try {
       toast.info("正在准备 HTML...");
 
-      const html = markdownToHtml(previewMarkdown, previewTitle);
-
-      // Call API to embed cached images
+      // Render markdown to full HTML and embed images on server
       const response = await fetch("/api/export/html", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ html }),
+        body: JSON.stringify({ markdown: previewMarkdown, title: previewTitle }),
       });
 
-      let finalHtml = html;
-      if (response.ok) {
-        const data = await response.json();
-        finalHtml = data.html;
+      if (!response.ok) {
+        throw new Error("Failed to generate HTML");
+      }
+
+      const data = await response.json();
+      const finalHtml = typeof data?.html === "string" ? data.html : "";
+      if (!finalHtml) {
+        throw new Error("Missing HTML from server");
       }
 
       const blob = new Blob([finalHtml], { type: "text/html;charset=utf-8" });
@@ -221,14 +303,10 @@ export default function Home() {
     try {
       toast.info("正在生成 Word 文档...");
 
-      const html = markdownToHtml(previewMarkdown, previewTitle);
-      const bodyMatch = html.match(/<body>([\s\S]*)<\/body>/);
-      const bodyContent = bodyMatch ? bodyMatch[1] : previewMarkdown;
-
       const response = await fetch("/api/export/docx", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ html: bodyContent }),
+        body: JSON.stringify({ markdown: previewMarkdown, title: previewTitle }),
       });
 
       if (!response.ok) {
@@ -258,36 +336,70 @@ export default function Home() {
     try {
       toast.info("正在准备打印...");
 
-      const html = markdownToHtml(previewMarkdown, previewTitle);
-
-      // Call API to embed cached images
+      // Generate final export HTML (with embedded images) on server
       const response = await fetch("/api/export/html", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ html }),
+        body: JSON.stringify({ markdown: previewMarkdown, title: previewTitle }),
       });
 
-      let finalHtml = html;
-      if (response.ok) {
-        const data = await response.json();
-        finalHtml = data.html;
+      if (!response.ok) {
+        throw new Error("Failed to generate printable HTML");
       }
 
-      const printWindow = window.open("", "_blank");
+      const data = await response.json();
+      const finalHtml = typeof data?.html === "string" ? data.html : "";
+      if (!finalHtml) {
+        throw new Error("Missing HTML from server");
+      }
 
-      if (!printWindow) {
-        toast.error("无法打开打印窗口，请检查浏览器弹窗设置");
+      // Print without opening a new window (avoid popup blockers / weird extra tab)
+      const iframe = document.createElement("iframe");
+      iframe.style.position = "fixed";
+      iframe.style.right = "0";
+      iframe.style.bottom = "0";
+      iframe.style.width = "0";
+      iframe.style.height = "0";
+      iframe.style.border = "0";
+      iframe.style.visibility = "hidden";
+
+      document.body.appendChild(iframe);
+
+      const win = iframe.contentWindow;
+      if (!win) {
+        iframe.remove();
+        toast.error("无法创建打印容器");
         return;
       }
 
-      printWindow.document.write(finalHtml);
-      printWindow.document.close();
-
-      printWindow.onload = () => {
-        printWindow.print();
+      const cleanup = () => {
+        try {
+          win.removeEventListener("afterprint", cleanup);
+        } catch {
+          // ignore
+        }
+        iframe.remove();
       };
 
-      toast.info("已打开打印窗口，请选择「另存为 PDF」");
+      win.addEventListener("afterprint", cleanup);
+
+      win.document.open();
+      win.document.write(finalHtml);
+      win.document.close();
+
+      // Give the browser a tick to layout before printing.
+      setTimeout(() => {
+        try {
+          win.focus();
+          win.print();
+        } catch (e) {
+          console.error("Print error:", e);
+          cleanup();
+          toast.error("无法打开打印对话框");
+        }
+      }, 200);
+
+      toast.info("已打开打印对话框，请选择「另存为 PDF」");
     } catch (err) {
       console.error("Print error:", err);
       toast.error("打印准备失败");
@@ -643,20 +755,27 @@ export default function Home() {
                     className="absolute right-0 top-full mt-1 w-48 bg-notion-bg border border-notion-border rounded-md shadow-lg z-50 notion-dropdown"
                     onClick={(e) => e.stopPropagation()}
                   >
-                    <button
-                      className="flex items-center gap-2 w-full px-3 py-2 text-sm text-notion-text hover:bg-notion-hover transition-colors"
-                      onClick={downloadMarkdown}
-                    >
-                      <FileCode className="h-4 w-4" />
-                      Markdown (.md)
-                    </button>
-                    <button
-                      className="flex items-center gap-2 w-full px-3 py-2 text-sm text-notion-text hover:bg-notion-hover transition-colors"
-                      onClick={downloadHtml}
-                    >
-                      <FileText className="h-4 w-4" />
-                      HTML (.html)
-                    </button>
+                     <button
+                       className="flex items-center gap-2 w-full px-3 py-2 text-sm text-notion-text hover:bg-notion-hover transition-colors"
+                       onClick={downloadMarkdown}
+                     >
+                       <FileCode className="h-4 w-4" />
+                       Markdown (.md)
+                     </button>
+                     <button
+                       className="flex items-center gap-2 w-full px-3 py-2 text-sm text-notion-text hover:bg-notion-hover transition-colors"
+                       onClick={downloadMarkdownZip}
+                     >
+                       <Archive className="h-4 w-4" />
+                       Markdown + 图片 (.zip)
+                     </button>
+                     <button
+                       className="flex items-center gap-2 w-full px-3 py-2 text-sm text-notion-text hover:bg-notion-hover transition-colors"
+                       onClick={downloadHtml}
+                     >
+                       <FileText className="h-4 w-4" />
+                       HTML (.html)
+                     </button>
                     <button
                       className="flex items-center gap-2 w-full px-3 py-2 text-sm text-notion-text hover:bg-notion-hover transition-colors"
                       onClick={downloadDocx}

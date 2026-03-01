@@ -3,6 +3,7 @@ import type { NotionPage } from "@/lib/notion-tree";
 import type { ConvertedPage } from "@/app/api/notion/batch-convert/route";
 import { getPagePath, sanitizePathSegment } from "@/lib/notion-tree";
 import type { NotionPageInfo } from "@/app/api/notion/search/route";
+import { extractMarkdownImageUrls } from "@/lib/markdown-images";
 
 export interface ImageStats {
   total: number;
@@ -37,8 +38,7 @@ async function processImages(
   onImageProgress?: (current: number, total: number) => void
 ): Promise<{ markdown: string; images: Map<string, Blob>; stats: ImageStats }> {
   const images = new Map<string, Blob>();
-  const imageRegex = /!\[(.*?)\]\((.*?)\)/g;
-  const matches = Array.from(markdown.matchAll(imageRegex));
+  const urls = extractMarkdownImageUrls(markdown);
 
   const stats: ImageStats = {
     total: 0,
@@ -46,7 +46,7 @@ async function processImages(
     failed: 0,
   };
 
-  if (matches.length === 0) {
+  if (urls.length === 0) {
     return { markdown, images, stats };
   }
 
@@ -54,8 +54,7 @@ async function processImages(
   const uniqueUrls = new Map<string, string>(); // url -> filename
   let imageIndex = 0;
 
-  for (const match of matches) {
-    const imageUrl = match[2];
+  for (const imageUrl of urls) {
     if (!uniqueUrls.has(imageUrl)) {
       imageIndex++;
       uniqueUrls.set(imageUrl, `image-${imageIndex}`);
@@ -260,6 +259,36 @@ export async function createNestedZip(
   });
 
   return content;
+}
+
+/**
+ * Create a ZIP for a single markdown document with downloaded images.
+ * Useful for single-page export (Markdown + images) where Notion signed URLs may expire.
+ */
+export async function createMarkdownZipWithImages(
+  markdown: string,
+  title: string,
+  onImageProgress?: (current: number, total: number) => void
+): Promise<Blob> {
+  const zip = new JSZip();
+  const folderName = sanitizePathSegment(title || "notion-export");
+  const folder = zip.folder(folderName);
+
+  const { markdown: processedMarkdown, images } = await processImages(markdown, onImageProgress);
+
+  if (folder) {
+    folder.file("export.md", processedMarkdown);
+    if (images.size > 0) {
+      const imgFolder = folder.folder("images");
+      if (imgFolder) {
+        for (const [filename, blob] of images) {
+          imgFolder.file(filename, blob);
+        }
+      }
+    }
+  }
+
+  return zip.generateAsync({ type: "blob" });
 }
 
 /**

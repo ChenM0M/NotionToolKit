@@ -3,8 +3,18 @@ import { getNotionPageId } from "@/lib/notion-utils";
 import { createNotionClient, withRetry } from "@/lib/notion-client";
 import { createNotionToMarkdown, mdBlocksToParentMarkdown } from "@/lib/notion-markdown";
 import type { PageObjectResponse, PartialPageObjectResponse, DatabaseObjectResponse, PartialDatabaseObjectResponse } from "@notionhq/client/build/src/api-endpoints";
+import { LruTtlCache } from "@/lib/server/lru-ttl-cache";
+import { tokenHash } from "@/lib/server/token-hash";
 
 export const runtime = "nodejs";
+
+const convertCache = new LruTtlCache<
+  string,
+  { markdown: string; title: string }
+>({
+  maxEntries: 60,
+  defaultTtlMs: 5 * 60_000,
+});
 
 /**
  * Extract page title from Notion page response
@@ -64,6 +74,16 @@ export async function POST(request: Request) {
       );
     }
 
+    const cacheKey = `${tokenHash(token)}:${pageId}`;
+    const cached = convertCache.get(cacheKey);
+    if (cached) {
+      return NextResponse.json({
+        markdown: cached.markdown,
+        title: cached.title,
+        cached: true,
+      });
+    }
+
     const notion = createNotionClient(token);
 
     // Fetch page info with retry
@@ -85,9 +105,12 @@ export async function POST(request: Request) {
     );
     const markdown = mdBlocksToParentMarkdown(n2m, mdblocks);
 
+    convertCache.set(cacheKey, { markdown, title });
+
     return NextResponse.json({
       markdown,
       title,
+      cached: false,
     });
   } catch (error: unknown) {
     console.error("Notion API Error:", error);
